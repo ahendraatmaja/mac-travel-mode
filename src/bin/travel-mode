@@ -1,0 +1,156 @@
+#!/bin/bash
+# travel-mode: keep a Mac awake with the lid closed, lock the screen when the lid closes,
+# and check that Wi-Fi is on an iPhone Personal Hotspot.
+#
+#   travel-mode on | off | toggle | status
+#   travel-mode wifi              -> "<state><TAB><message>", state = hotspot | other | off | none
+#   travel-mode join [name]       -> join the saved hotspot (or <name>) and wait until it is up
+#   travel-mode hotspot [name]    -> show or set the hotspot network name
+#   travel-mode networks          -> list saved Wi-Fi networks
+set -u
+
+SELF="$(/usr/bin/readlink -f "$0" 2>/dev/null || echo "$0")"
+BIN_DIR="$(cd "$(/usr/bin/dirname "$SELF")" && pwd)"
+LABEL="io.github.ahendraatmaja.mac-travel-mode.lid-lock"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+CONF_DIR="$HOME/Library/Application Support/Travel Mode"
+HOTSPOT_FILE="$CONF_DIR/hotspot-name"
+LOG="$HOME/Library/Logs/travel-mode.log"
+HOTSPOT_ROUTER="172.20.10.1"   # iPhone / iPad Personal Hotspot always uses 172.20.10.0/28
+
+is_on() { /usr/bin/pmset -g | /usr/bin/grep -q 'SleepDisabled[[:space:]]*1'; }
+
+wifi_dev() { /usr/sbin/networksetup -listallhardwareports | /usr/bin/awk '/Wi-Fi/{getline; print $2; exit}'; }
+
+admin() { # $1 = shell command run as root, $2 = reason shown in the macOS password dialog
+  /usr/bin/osascript -e "do shell script \"$1\" with administrator privileges with prompt \"$2\"" >/dev/null
+}
+
+write_plist() {
+  /bin/mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+  /bin/cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>$SELF</string><string>_watch</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/travel-mode.err.log</string>
+</dict>
+</plist>
+EOF
+}
+
+watcher_start() {
+  write_plist
+  /bin/launchctl bootout "gui/$(/usr/bin/id -u)/$LABEL" 2>/dev/null || true
+  /bin/launchctl bootstrap "gui/$(/usr/bin/id -u)" "$PLIST"
+}
+
+watcher_stop() {
+  /bin/launchctl bootout "gui/$(/usr/bin/id -u)/$LABEL" 2>/dev/null || true
+  /bin/rm -f "$PLIST"
+}
+
+watcher_running() {
+  /bin/launchctl print "gui/$(/usr/bin/id -u)/$LABEL" 2>/dev/null | /usr/bin/grep -q 'state = running'
+}
+
+lock_now() {
+  if [ -x "$BIN_DIR/lockscreen" ] && "$BIN_DIR/lockscreen"; then return 0; fi
+  /usr/bin/pmset displaysleepnow   # fallback: locks if "Require password" is set to Immediately
+}
+
+cmd_watch() { # run by launchd: lock on lid close while travel mode is on; exit when it is off
+  local prev="No" lid
+  while :; do
+    is_on || exit 0
+    lid=$(/usr/sbin/ioreg -r -k AppleClamshellState -d 1 | /usr/bin/awk -F'= ' '/"AppleClamshellState"/ {print $2; exit}')
+    if [ "$lid" = "Yes" ] && [ "$prev" != "Yes" ]; then
+      lock_now
+      echo "$(/bin/date '+%F %T') lid closed -> screen locked" >> "$LOG"
+    fi
+    prev="$lid"
+    /bin/sleep 2
+  done
+}
+
+cmd_on() {
+  admin "/usr/bin/pmset -a disablesleep 1" "Travel Mode wants to keep this Mac awake with the lid closed." || { echo "Cancelled. Nothing changed."; exit 1; }
+  watcher_start
+  echo "Travel Mode ON: stays awake with the lid closed and locks when you close it."
+}
+
+cmd_off() {
+  admin "/usr/bin/pmset -a disablesleep 0" "Travel Mode wants to restore normal sleep." || { echo "Cancelled. Nothing changed."; exit 1; }
+  watcher_stop
+  echo "Travel Mode OFF: normal sleep is back."
+}
+
+cmd_wifi() {
+  local d dev
+  for d in $(/usr/sbin/networksetup -listallhardwareports | /usr/bin/awk '/^Device:/{print $2}'); do
+    if [ "$(/usr/sbin/ipconfig getoption "$d" router 2>/dev/null)" = "$HOTSPOT_ROUTER" ]; then
+      printf 'hotspot\t✓ On your iPhone hotspot\n'; return 0
+    fi
+  done
+  dev=$(wifi_dev)
+  if [ -n "$dev" ] && /usr/sbin/networksetup -getairportpower "$dev" | /usr/bin/grep -q ': Off'; then
+    printf 'off\t⚠︎ Wi-Fi is off\n'; return 0
+  fi
+  if [ -z "$dev" ] || [ -z "$(/usr/sbin/ipconfig getoption "$dev" router 2>/dev/null)" ]; then
+    printf 'none\t⚠︎ Wi-Fi is not connected\n'; return 0
+  fi
+  printf 'other\t⚠︎ Not on your iPhone hotspot (another Wi-Fi network)\n'
+}
+
+cmd_hotspot() {
+  if [ $# -gt 0 ] && [ -n "$1" ]; then
+    /bin/mkdir -p "$CONF_DIR"; printf '%s\n' "$1" > "$HOTSPOT_FILE"
+  fi
+  [ -s "$HOTSPOT_FILE" ] && /usr/bin/head -1 "$HOTSPOT_FILE"
+}
+
+cmd_networks() {
+  /usr/sbin/networksetup -listpreferredwirelessnetworks "$(wifi_dev)" 2>/dev/null | /usr/bin/tail -n +2 | /usr/bin/sed 's/^[[:space:]]*//'
+}
+
+cmd_join() {
+  local name="${1:-}" dev out i
+  [ -n "$name" ] || name=$(cmd_hotspot)
+  [ -n "$name" ] || { echo "No hotspot name set. Run: travel-mode hotspot \"<name>\""; exit 1; }
+  dev=$(wifi_dev)
+  /usr/sbin/networksetup -setairportpower "$dev" on
+  out=$(/usr/sbin/networksetup -setairportnetwork "$dev" "$name" 2>&1)
+  for i in $(/usr/bin/seq 1 20); do
+    if cmd_wifi | /usr/bin/grep -q '^hotspot'; then echo "Joined $name"; return 0; fi
+    /bin/sleep 1
+  done
+  echo "Could not join $name. ${out}"; exit 1
+}
+
+cmd_status() {
+  if is_on; then echo "Travel Mode: ON (lid close will not sleep)"; else echo "Travel Mode: OFF (normal sleep)"; fi
+  if watcher_running; then echo "Lid lock:    on (screen locks when the lid closes)"; else echo "Lid lock:    off"; fi
+  echo "Wi-Fi:       $(cmd_wifi | /usr/bin/cut -f2)"
+  echo "Battery:     $(/usr/bin/pmset -g batt | /usr/bin/grep -Eo '[0-9]+%' | /usr/bin/head -1)"
+}
+
+case "${1:-status}" in
+  on)       cmd_on ;;
+  off)      cmd_off ;;
+  toggle)   if is_on; then cmd_off; else cmd_on; fi ;;
+  status)   cmd_status ;;
+  is-on)    is_on ;;
+  wifi)     cmd_wifi ;;
+  join)     shift; cmd_join "${1:-}" ;;
+  hotspot)  shift; cmd_hotspot "${1:-}" ;;
+  networks) cmd_networks ;;
+  _watch)   cmd_watch ;;
+  _rewatch) if is_on; then watcher_start; fi ;;   # after install/upgrade: point the watcher at this copy
+  -h|--help|help) /usr/bin/sed -n '2,9p' "$SELF" | /usr/bin/sed 's/^# \{0,1\}//' ;;
+  *) echo "Unknown command: $1 (try: travel-mode help)"; exit 2 ;;
+esac
