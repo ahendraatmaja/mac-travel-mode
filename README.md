@@ -105,8 +105,10 @@ network is your iPhone.
 
 Click **Check for Updates** at the bottom of the window (also in the **Travel Mode** menu and the
 menu bar menu). It asks GitHub for this repository's latest release and shows either "You're up
-to date" or the new version with a **View on GitHub** link. Travel Mode never checks on its own,
-and never downloads or installs anything itself.
+to date" or the new version with a **View on GitHub** link. If the check can't get through
+(offline, a hotel Wi-Fi sign-in page, GitHub busy), it says why and links to the releases page so
+you can look yourself. Travel Mode never checks on its own, and never downloads or installs
+anything itself.
 
 To update: download the new disk image from the release page, quit Travel Mode, drag the new
 Travel Mode onto Applications and choose **Replace**. Your settings stay. If Travel Mode was on,

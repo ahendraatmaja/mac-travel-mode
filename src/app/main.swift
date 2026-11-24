@@ -49,6 +49,12 @@ enum UpdateCheck {
         return r
     }
 
+    /// The releases page, built only from the repo name fixed in Info.plist at build time (never from
+    /// a network answer), so people can always check for themselves.
+    static var releasesPage: URL? {
+        repo.flatMap { URL(string: "https://github.com/\($0)/releases") }
+    }
+
     /// "1.10.0" is newer than "1.9.2". A leading "v" and any "-suffix" are ignored.
     static func isNewer(_ candidate: String, than current: String) -> Bool {
         func parts(_ v: String) -> [Int] {
@@ -120,7 +126,7 @@ enum UpdateCheck {
             }
             guard isNewer(version, than: current) else { return finish(.upToDate(current)) }
             // Only ever open a page of this app's own repository.
-            var page = URL(string: "https://github.com/\(repo)/releases/latest")!
+            var page = releasesPage!
             if let s = json["html_url"] as? String, let u = URL(string: s),
                s.lowercased().hasPrefix("https://github.com/\(repo.lowercased())/releases/") {
                 page = u
@@ -320,9 +326,15 @@ struct UpdateStatusLine: View {
         case .checking: caption("Checking…")
         case .upToDate: caption("You're up to date.")
         case .failed(let why):
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
-                caption("Couldn't check. \(why)")
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+                    caption("Couldn't check. \(why)")
+                }
+                if let page = UpdateCheck.releasesPage {
+                    Link("See the latest version on GitHub", destination: page)
+                        .padding(.leading, 16)   // line up with the message, past the icon
+                }
             }
             .font(.caption)
         case .available(let u):
