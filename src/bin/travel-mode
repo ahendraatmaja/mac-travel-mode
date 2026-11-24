@@ -207,6 +207,13 @@ cmd_join() {
   echo "Could not join $name. ${out}"; exit 1
 }
 
+cmd_uninstall() { # used by the app's "Uninstall Travel Mode…" (Travel Mode must already be off)
+  watcher_stop
+  /bin/rm -rf "$CONF_DIR" "$LOG" "$HOME/Library/Logs/travel-mode.err.log"
+  local link="$HOME/.local/bin/travel-mode"
+  if [ -L "$link" ] && [ "$(/usr/bin/readlink -f "$link")" = "$SELF" ]; then /bin/rm -f "$link"; fi
+}
+
 cmd_status() {
   if is_on; then echo "Travel Mode: ON (lid close will not sleep)"; else echo "Travel Mode: OFF (normal sleep)"; fi
   if watcher_running; then echo "Watcher:     on (locks on lid close, rejoins the hotspot if Wi-Fi drops)"; else echo "Watcher:     off"; fi
@@ -227,7 +234,8 @@ case "${1:-status}" in
   networks) cmd_networks ;;
   log)      /usr/bin/tail -n "${2:-20}" "$LOG" 2>/dev/null || echo "No events yet." ;;
   _watch)   cmd_watch ;;
-  _rewatch) if is_on; then watcher_start; fi ;;   # after install/upgrade: point the watcher at this copy
+  _rewatch) if is_on; then watcher_start; fi ;;
+  _uninstall) if is_on; then echo "Turn Travel Mode off first."; exit 1; fi; cmd_uninstall ;;   # after install/upgrade: point the watcher at this copy
   -h|--help|help) /usr/bin/sed -n '2,10p' "$SELF" | /usr/bin/sed 's/^# \{0,1\}//' ;;
   *) echo "Unknown command: $1 (try: travel-mode help)"; exit 2 ;;
 esac

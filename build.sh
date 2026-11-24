@@ -14,14 +14,19 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/bin"
 RES="$APP/Contents/Resources"
 
-# App (window + optional menu bar icon)
-/usr/bin/xcrun swiftc -O -swift-version 5 -target "$(uname -m)-apple-macos13.0" \
-  -o "$APP/Contents/MacOS/TravelMode" "$ROOT/src/app/main.swift"
+# App (window + optional menu bar icon), universal: Apple silicon + Intel
+OBJ="$ROOT/build/obj"; mkdir -p "$OBJ"
+for arch in arm64 x86_64; do
+  /usr/bin/xcrun swiftc -O -swift-version 5 -target "$arch-apple-macos13.0" \
+    -o "$OBJ/TravelMode-$arch" "$ROOT/src/app/main.swift"
+done
+/usr/bin/lipo -create -output "$APP/Contents/MacOS/TravelMode" "$OBJ/TravelMode-arm64" "$OBJ/TravelMode-x86_64"
 
-# Helpers and the script the app drives
-/usr/bin/xcrun clang -O2 -o "$RES/bin/lockscreen" "$ROOT/src/lockscreen.c"
+# Helpers and the script the app drives (also universal)
+ARCHS=(-arch arm64 -arch x86_64 -mmacosx-version-min=13.0)
+/usr/bin/xcrun clang "${ARCHS[@]}" -O2 -o "$RES/bin/lockscreen" "$ROOT/src/lockscreen.c"
 "$RES/bin/lockscreen" --check
-/usr/bin/xcrun clang -fobjc-arc -O2 -o "$RES/bin/wifiname" "$ROOT/src/wifiname.m" \
+/usr/bin/xcrun clang "${ARCHS[@]}" -fobjc-arc -O2 -o "$RES/bin/wifiname" "$ROOT/src/wifiname.m" \
   -framework Foundation -framework SystemConfiguration
 cp "$ROOT/src/bin/travel-mode" "$RES/bin/travel-mode"
 chmod +x "$RES/bin/travel-mode"

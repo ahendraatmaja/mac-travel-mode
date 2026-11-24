@@ -38,8 +38,27 @@ Your password goes to macOS, never to the app.
 
 ## Install
 
-Requires macOS 13 or later, an administrator account and the Xcode Command Line Tools
-(`xcode-select --install`), which build the app on your Mac.
+Requires macOS 13 or later on Apple silicon or Intel, and an administrator account.
+
+### From the disk image
+
+1. Download `Travel-Mode-<version>.dmg` from the
+   [Releases](https://github.com/ahendraatmaja/mac-travel-mode/releases) page and open it.
+2. Drag **Travel Mode** onto **Applications**, then eject the disk image.
+3. Open Travel Mode from Applications.
+
+**First launch:** the app isn't notarised by Apple yet, so macOS says it can't verify it.
+Click **Done**, open **System Settings > Privacy & Security**, scroll down to the message about
+Travel Mode, click **Open Anyway** and confirm with your password. You only do this once.
+(Comfortable in Terminal? `xattr -dr com.apple.quarantine "/Applications/Travel Mode.app"`
+does the same.)
+
+To use the `travel-mode` command as well:
+`ln -s "/Applications/Travel Mode.app/Contents/Resources/bin/travel-mode" ~/.local/bin/travel-mode`
+
+### From source
+
+Needs the Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
 git clone https://github.com/ahendraatmaja/mac-travel-mode.git
@@ -47,9 +66,9 @@ cd mac-travel-mode
 ./install.sh
 ```
 
-This builds **Travel Mode.app** (a small native Swift app) into `~/Applications` and adds a
+This builds **Travel Mode.app** (a small native Swift app) into `~/Applications` and adds the
 `travel-mode` command in `~/.local/bin`. Running `./install.sh` again upgrades in place, even
-while Travel Mode is on.
+while Travel Mode is on. A source build runs without the first-launch approval.
 
 Nothing is downloaded at install time and nothing runs in the background while Travel Mode is off.
 
@@ -119,12 +138,12 @@ Android hotspots use other addresses and show as "another Wi-Fi network".
 
 ## Uninstall
 
-```bash
-./uninstall.sh
-```
+In the app, choose **Travel Mode > Uninstall Travel Mode…** (or run `./uninstall.sh` from the
+source folder). Either way it restores normal sleep (asking for your password if Travel Mode is
+on) and removes the app, the command, the background watcher and the settings.
 
-Restores normal sleep (asks for your password if Travel Mode is on) and removes the app,
-the command, the background watcher and the settings.
+Please don't just drag the app to the Trash while Travel Mode is on: your Mac would stay set to
+never sleep. If that happens, run `sudo pmset -a disablesleep 0` in Terminal.
 
 ## Files it touches
 
@@ -143,7 +162,10 @@ the command, the background watcher and the settings.
 `./test.sh` replays Wi-Fi sequences (hotspot drop, long outage, switching networks, Wi-Fi off)
 through the watcher with a simulated clock. It changes nothing on your Mac.
 
-The app is one Swift file (`src/app/main.swift`) driving the `travel-mode` script. To redraw the
+The app is one Swift file (`src/app/main.swift`) driving the `travel-mode` script. `./build.sh`
+builds a universal app (Apple silicon + Intel); `./make-dmg.sh` wraps it in a drag-to-Applications
+disk image (`build/Travel-Mode-<version>.dmg`), and signs and notarises it when `SIGN_IDENTITY`
+and `NOTARY_PROFILE` are set (see the script). To redraw the
 README screenshots: `"build/Travel Mode.app/Contents/MacOS/TravelMode" --snapshot out.png --demo`
 (add `--dark` for dark mode).
 

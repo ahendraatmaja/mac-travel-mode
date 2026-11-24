@@ -278,6 +278,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.refresh()
         model.startTimer()
         showWindow()
+        checkLocation()
+    }
+
+    /// Opened straight from the disk image (or a quarantine "translocated" copy): the background
+    /// watcher would point at a path that disappears, so ask the user to move the app first.
+    func checkLocation() {
+        let path = Bundle.main.bundlePath
+        guard path.hasPrefix("/Volumes/") || path.contains("/AppTranslocation/") else { return }
+        let alert = NSAlert()
+        alert.messageText = "Move Travel Mode to Applications first"
+        alert.informativeText = "Travel Mode is running from the disk image or a temporary location, and its background helper needs a permanent home.\n\nQuit, drag Travel Mode into the Applications folder, eject the disk image, then open Travel Mode from Applications."
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Continue Anyway")
+        if alert.runModal() == .alertFirstButtonReturn { NSApp.terminate(nil) }
+    }
+
+    @objc func uninstall() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Uninstall Travel Mode?"
+        alert.informativeText = "This turns Travel Mode off so your Mac sleeps normally again, removes its background helper and settings, and moves the app to the Trash."
+        alert.addButton(withTitle: "Uninstall")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        if Shell.run(model.tool, ["is-on"]).status == 0, Shell.run(model.tool, ["off"]).status != 0 {
+            let stop = NSAlert()
+            stop.messageText = "Travel Mode is still on"
+            stop.informativeText = "Nothing was removed. Turning it off needs your Mac password."
+            stop.runModal()
+            return
+        }
+        Shell.run(model.tool, ["_uninstall"])
+        window.setFrameAutosaveName("")
+        if let id = Bundle.main.bundleIdentifier { UserDefaults.standard.removePersistentDomain(forName: id) }
+        NSWorkspace.shared.recycle([Bundle.main.bundleURL]) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -319,6 +357,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Travel Mode",
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let uninstallItem = NSMenuItem(title: "Uninstall Travel Mode…", action: #selector(uninstall), keyEquivalent: "")
+        uninstallItem.target = self
+        appMenu.addItem(uninstallItem)
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Travel Mode", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(.separator())
