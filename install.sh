@@ -6,6 +6,12 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 DEST="$HOME/Applications/Travel Mode.app"
 mkdir -p "$HOME/Applications"
+WAS_RUNNING=""
+if /usr/bin/pgrep -xq TravelMode; then
+  WAS_RUNNING=1
+  /usr/bin/osascript -e 'quit app id "io.github.ahendraatmaja.mac-travel-mode"' 2>/dev/null || /usr/bin/pkill -x TravelMode || true
+  sleep 1
+fi
 rm -rf "$DEST"
 cp -R "$ROOT/build/Travel Mode.app" "$DEST"
 touch "$DEST"
@@ -15,8 +21,9 @@ touch "$DEST"
 mkdir -p "$HOME/.local/bin"
 ln -sf "$DEST/Contents/Resources/bin/travel-mode" "$HOME/.local/bin/travel-mode"
 
-# If Travel Mode is already on (upgrade), point the lid-lock watcher at the new copy.
+# If Travel Mode is already on (upgrade), point the watcher at the new copy.
 "$DEST/Contents/Resources/bin/travel-mode" _rewatch
+[ -n "$WAS_RUNNING" ] && /usr/bin/open "$DEST"
 
 echo
 echo "Installed: $DEST"

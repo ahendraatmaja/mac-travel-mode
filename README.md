@@ -7,7 +7,12 @@ follow from your phone. Travel Mode keeps the Mac awake with the lid closed, **l
 when you close it**, tells you whether Wi-Fi is on your **iPhone Personal Hotspot**, and
 **rejoins that hotspot** if the connection drops.
 
-<p align="center"><i>One small app, one button: Turn On / Turn Off.</i></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.png">
+    <img src="assets/screenshot-light.png" width="400" alt="Travel Mode window: on, on the iPhone hotspot, 82% battery">
+  </picture>
+</p>
 
 ## Why
 
@@ -24,7 +29,8 @@ an automatic screen lock, a hotspot check and automatic reconnect.
 | **Locks on lid close** | A small background watcher locks the screen within about 2 seconds of the lid closing |
 | **Hotspot check** | Shows "On your iPhone hotspot", or a warning plus a **Join** button |
 | **Rejoins your hotspot** | If Wi-Fi drops to nothing, it rejoins the last iPhone hotspot you used (details below) |
-| **Battery at a glance** | Shown every time you open the app |
+| **Battery at a glance** | Shown in the window and the menu bar menu |
+| **Menu bar icon (optional)** | A suitcase icon, filled when on, with Turn On / Off and Join in its menu |
 | **Survives restarts** | If you restart while it's on, the watcher comes back on its own |
 
 The app asks for your Mac password (the normal macOS dialog) each time you turn it on or off.
@@ -32,7 +38,8 @@ Your password goes to macOS, never to the app.
 
 ## Install
 
-Requires macOS 13 or later and an administrator account.
+Requires macOS 13 or later, an administrator account and the Xcode Command Line Tools
+(`xcode-select --install`), which build the app on your Mac.
 
 ```bash
 git clone https://github.com/ahendraatmaja/mac-travel-mode.git
@@ -40,20 +47,22 @@ cd mac-travel-mode
 ./install.sh
 ```
 
-This builds **Travel Mode.app** into `~/Applications` and adds a `travel-mode` command in
-`~/.local/bin`. The lock helper is compiled with `clang` from the Xcode Command Line Tools
-(`xcode-select --install`), and so is the helper that reads the hotspot's name. Without them,
-the lid lock falls back to turning the display off (which still locks if **System Settings >
-Lock Screen > Require password** is set to **Immediately**), and you set the hotspot name
-yourself with `travel-mode hotspot "<name>"`.
+This builds **Travel Mode.app** (a small native Swift app) into `~/Applications` and adds a
+`travel-mode` command in `~/.local/bin`. Running `./install.sh` again upgrades in place, even
+while Travel Mode is on.
 
 Nothing is downloaded at install time and nothing runs in the background while Travel Mode is off.
 
 ## Use
 
-**App:** press Cmd+Space, type "Travel Mode", press Return. Drag it to the Dock for one-click
-access. To put it in Control Center or on a keyboard shortcut, create a Shortcut with a single
-"Open App: Travel Mode" action.
+**App:** press Cmd+Space, type "Travel Mode", press Return. It's a normal Mac window with the
+usual close, minimise and zoom buttons (Cmd+W, Cmd+M, Cmd+Q work too).
+
+**Menu bar:** switch on **Show in menu bar** to keep a suitcase icon in the menu bar (filled while
+Travel Mode is on). Its menu shows the status, Turn On / Off, Join your hotspot, and Open. With
+the icon on, closing the window keeps Travel Mode in the menu bar; with it off, closing the
+window quits the app. To have the icon after a restart, add Travel Mode to **System Settings >
+General > Login Items**.
 
 **Command line:**
 
@@ -126,12 +135,17 @@ the command, the background watcher and the settings.
 | `~/Library/LaunchAgents/io.github.ahendraatmaja.mac-travel-mode.lid-lock.plist` | The watcher (lid lock + reconnect), only while on |
 | `~/Library/Application Support/Travel Mode/hotspot-name` | The last iPhone hotspot you used |
 | `~/Library/Logs/travel-mode.log` | Lid locks, Wi-Fi drops, reconnect attempts |
+| `~/Library/Preferences/io.github.ahendraatmaja.mac-travel-mode.plist` | The "Show in menu bar" choice and window position |
 | System power setting `SleepDisabled` | Set to 1 while on, 0 when off |
 
 ## Development
 
 `./test.sh` replays Wi-Fi sequences (hotspot drop, long outage, switching networks, Wi-Fi off)
 through the watcher with a simulated clock. It changes nothing on your Mac.
+
+The app is one Swift file (`src/app/main.swift`) driving the `travel-mode` script. To redraw the
+README screenshots: `"build/Travel Mode.app/Contents/MacOS/TravelMode" --snapshot out.png --demo`
+(add `--dark` for dark mode).
 
 ## License
 

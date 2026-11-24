@@ -177,7 +177,9 @@ cmd_wifi() {
   if [ -z "$dev" ] || [ -z "$(/usr/sbin/ipconfig getoption "$dev" router 2>/dev/null)" ]; then
     printf 'none\t⚠︎ Wi-Fi is not connected\n'; return 0
   fi
-  printf 'other\t⚠︎ Not on your iPhone hotspot (another Wi-Fi network)\n'
+  local n; n=$(wifi_name || true)
+  if [ -n "$n" ]; then printf 'other\t⚠︎ On %s, not your iPhone hotspot\n' "$n"
+  else printf 'other\t⚠︎ Not on your iPhone hotspot (another Wi-Fi network)\n'; fi
 }
 
 cmd_hotspot() {
