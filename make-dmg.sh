@@ -21,11 +21,15 @@ if [ -n "${SIGN_IDENTITY:-}" ]; then
   /usr/bin/codesign --force --options runtime --timestamp -s "$SIGN_IDENTITY" "$APP"
 fi
 
-# dmgbuild (writes the Finder window layout without scripting Finder), in a private venv
+# dmgbuild (writes the Finder window layout without scripting Finder), in a private venv,
+# pinned by hash in requirements-dmg.txt. The venv is rebuilt whenever that file changes.
 VENV="$ROOT/build/.venv"
-if [ ! -x "$VENV/bin/dmgbuild" ]; then
+if ! /usr/bin/cmp -s "$ROOT/requirements-dmg.txt" "$VENV/requirements-dmg.txt" 2>/dev/null; then
+  rm -rf "$VENV"
   /usr/bin/python3 -m venv "$VENV"
-  "$VENV/bin/pip" install --quiet --disable-pip-version-check dmgbuild
+  "$VENV/bin/pip" install --quiet --disable-pip-version-check --require-hashes --only-binary :all: \
+    -r "$ROOT/requirements-dmg.txt"
+  cp "$ROOT/requirements-dmg.txt" "$VENV/requirements-dmg.txt"
 fi
 
 rm -f "$DMG"

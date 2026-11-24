@@ -26,11 +26,92 @@ enum Shell {
     }
 }
 
+// MARK: - Update check
+
+/// Asks GitHub for the latest published release of this app's repository (Info.plist key
+/// TMUpdateRepo, "owner/name") and compares it with the running version. It only reads: nothing
+/// is downloaded or installed, and the request carries no cookies or identifiers.
+enum UpdateCheck {
+    enum Result {
+        case upToDate(String)
+        case available(version: String, page: URL)
+        case failed(String)
+    }
+
+    static var currentVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+
+    static var repo: String? {
+        guard let r = Bundle.main.object(forInfoDictionaryKey: "TMUpdateRepo") as? String,
+              r.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil
+        else { return nil }
+        return r
+    }
+
+    /// "1.10.0" is newer than "1.9.2". A leading "v" and any "-suffix" are ignored.
+    static func isNewer(_ candidate: String, than current: String) -> Bool {
+        func parts(_ v: String) -> [Int] {
+            let core = v.trimmingCharacters(in: CharacterSet(charactersIn: "vV ")).split(separator: "-").first ?? ""
+            return core.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        }
+        let a = parts(candidate), b = parts(current)
+        for i in 0..<max(a.count, b.count) {
+            let x = i < a.count ? a[i] : 0, y = i < b.count ? b[i] : 0
+            if x != y { return x > y }
+        }
+        return false
+    }
+
+    static func check(completion: @escaping (Result) -> Void) {
+        let current = currentVersion
+        guard let repo = repo, let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else {
+            completion(.failed("This copy of Travel Mode has no update source."))
+            return
+        }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("TravelMode/\(current)", forHTTPHeaderField: "User-Agent")
+        let session = URLSession(configuration: .ephemeral)
+        session.dataTask(with: request) { data, response, error in
+            func finish(_ result: Result) {
+                session.finishTasksAndInvalidate()
+                DispatchQueue.main.async { completion(result) }
+            }
+            if let error = error { return finish(.failed(error.localizedDescription)) }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 404 { return finish(.failed("No published release was found on GitHub.")) }
+            guard status == 200, let data = data,
+                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let tag = json["tag_name"] as? String
+            else { return finish(.failed("GitHub sent an unexpected answer (HTTP \(status)).")) }
+            let version = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+            guard version.range(of: #"^[0-9][0-9A-Za-z.-]{0,31}$"#, options: .regularExpression) != nil else {
+                return finish(.failed("GitHub sent an unexpected version number."))
+            }
+            guard isNewer(version, than: current) else { return finish(.upToDate(current)) }
+            // Only ever open a page of this app's own repository.
+            var page = URL(string: "https://github.com/\(repo)/releases/latest")!
+            if let s = json["html_url"] as? String, let u = URL(string: s),
+               s.lowercased().hasPrefix("https://github.com/\(repo.lowercased())/releases/") {
+                page = u
+            }
+            finish(.available(version: version, page: page))
+        }.resume()
+    }
+}
+
+struct AvailableUpdate: Equatable {
+    let version: String
+    let page: URL
+}
+
 // MARK: - Model
 
 final class TravelModel: ObservableObject {
     struct State {
         var isOn = false
+        var watching = true             // the lid-lock watcher is running (only checked while on)
         var wifiState = "none"          // hotspot | other | off | none
         var wifiMessage = "Checking…"
         var battery = ""
@@ -48,21 +129,75 @@ final class TravelModel: ObservableObject {
         }
     }
 
+    @Published var checkForUpdates: Bool {
+        didSet {
+            UserDefaults.standard.set(checkForUpdates, forKey: "checkForUpdates")
+            if checkForUpdates { checkUpdatesIfDue() } else { setUpdate(nil) }
+        }
+    }
+    @Published private(set) var update: AvailableUpdate?
+
     var onMenuBarChange: ((Bool) -> Void)?
     var onChange: (() -> Void)?
 
     let tool: String
     private var timer: Timer?
+    private var updateTimer: Timer?
     private var refreshing = false
+    private var checkingUpdates = false
 
     init() {
         tool = Bundle.main.resourceURL!.appendingPathComponent("bin/travel-mode").path
-        showInMenuBar = UserDefaults.standard.bool(forKey: "showInMenuBar")
+        let defaults = UserDefaults.standard
+        defaults.register(defaults: ["checkForUpdates": true])
+        showInMenuBar = defaults.bool(forKey: "showInMenuBar")
+        checkForUpdates = defaults.bool(forKey: "checkForUpdates")
+        // An update found by an earlier check, until this copy is that version or newer.
+        if checkForUpdates, let v = defaults.string(forKey: "updateVersion"),
+           let p = defaults.string(forKey: "updatePage"), let page = URL(string: p),
+           UpdateCheck.isNewer(v, than: UpdateCheck.currentVersion) {
+            update = AvailableUpdate(version: v, page: page)
+        }
+    }
+
+    // Updates
+
+    func setUpdate(_ u: AvailableUpdate?) {
+        update = u
+        let defaults = UserDefaults.standard
+        defaults.set(u?.version, forKey: "updateVersion")
+        defaults.set(u?.page.absoluteString, forKey: "updatePage")
+        onChange?()
+    }
+
+    func apply(_ result: UpdateCheck.Result) {
+        switch result {
+        case .available(let v, let page):
+            setUpdate(AvailableUpdate(version: v, page: page))
+        case .upToDate:
+            setUpdate(nil)
+        case .failed:
+            return // offline or similar: keep what we knew and try again later
+        }
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
+    }
+
+    /// At most once a day, and only when the user leaves "Check for updates" on.
+    func checkUpdatesIfDue() {
+        guard checkForUpdates, !checkingUpdates else { return }
+        let last = UserDefaults.standard.double(forKey: "lastUpdateCheck")
+        guard Date().timeIntervalSince1970 - last >= 24 * 3600 else { return }
+        checkingUpdates = true
+        UpdateCheck.check { [weak self] result in
+            self?.checkingUpdates = false
+            self?.apply(result)
+        }
     }
 
     static func read(tool: String) -> State {
         var s = State()
         s.isOn = Shell.run(tool, ["is-on"]).status == 0
+        if s.isOn { s.watching = Shell.run(tool, ["is-watching"]).status == 0 }
         let wifi = Shell.run(tool, ["wifi"]).out.components(separatedBy: "\t")
         s.wifiState = wifi.first ?? "none"
         if wifi.count > 1 { s.wifiMessage = String(wifi[1].drop(while: { !$0.isLetter })) }
@@ -103,6 +238,9 @@ final class TravelModel: ObservableObject {
 
     func startTimer() {
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            self?.checkUpdatesIfDue()
+        }
     }
 
     func setOn(_ on: Bool) { perform([on ? "on" : "off"]) }
@@ -135,6 +273,7 @@ final class TravelModel: ObservableObject {
 
     // Presentation helpers
     var onHotspot: Bool { state.wifiState == "hotspot" }
+    var lidLockBroken: Bool { state.isOn && !state.watching }
     var joinTitle: String { state.hotspot.isEmpty ? "Join Hotspot…" : "Join \(state.hotspot)" }
     var batterySymbol: String {
         if state.pluggedIn { return "battery.100.bolt" }
@@ -196,11 +335,26 @@ struct ContentView: View {
                 Spacer()
             }
 
+            if let u = model.update {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.accentColor)
+                    Text("Travel Mode \(u.version) is available")
+                    Spacer()
+                    Button("Download…") { NSWorkspace.shared.open(u.page) }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.12)))
+            }
+
             VStack(spacing: 0) {
-                InfoRow(symbol: "lock.laptopcomputer",
-                        tint: s.isOn ? .accentColor : .secondary,
+                InfoRow(symbol: model.lidLockBroken ? "exclamationmark.triangle.fill" : "lock.laptopcomputer",
+                        tint: model.lidLockBroken ? .orange : (s.isOn ? .accentColor : .secondary),
                         title: "Lid",
-                        value: s.isOn ? "Stays awake, locks when closed" : "Sleeps when closed")
+                        value: model.lidLockBroken ? "Stays awake, but won't lock. Turn off and on again."
+                            : (s.isOn ? "Stays awake, locks when closed" : "Sleeps when closed"))
                 Divider().padding(.leading, 34)
                 InfoRow(symbol: model.onHotspot ? "personalhotspot" : "wifi.exclamationmark",
                         tint: model.onHotspot ? .green : .orange,
@@ -256,6 +410,20 @@ struct ContentView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
             }
+
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Check for updates")
+                    Text("Once a day, looks up the latest version on GitHub. No personal data is sent.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Toggle("Check for updates", isOn: $model.checkForUpdates)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
         }
         .padding(20)
         .frame(minWidth: 380, idealWidth: 400, maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -279,13 +447,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.startTimer()
         showWindow()
         checkLocation()
+        refreshWatcherIfNeeded()
+        model.checkUpdatesIfDue()
+    }
+
+    /// Running from the disk image or a quarantine "translocated" copy, which disappear later.
+    var isTemporaryLocation: Bool {
+        let path = Bundle.main.bundlePath
+        return path.hasPrefix("/Volumes/") || path.contains("/AppTranslocation/")
+    }
+
+    /// After an update or a move, a running watcher still uses the old copy's script. Restart it
+    /// from this copy once (`_rewatch` does nothing while Travel Mode is off).
+    func refreshWatcherIfNeeded() {
+        guard !isTemporaryLocation else { return }
+        let defaults = UserDefaults.standard
+        let tool = model.tool, version = UpdateCheck.currentVersion
+        guard defaults.string(forKey: "watcherTool") != tool || defaults.string(forKey: "watcherVersion") != version
+        else { return }
+        DispatchQueue.global(qos: .utility).async {
+            guard Shell.run(tool, ["_rewatch"]).status == 0 else { return }
+            DispatchQueue.main.async {
+                defaults.set(tool, forKey: "watcherTool")
+                defaults.set(version, forKey: "watcherVersion")
+            }
+        }
     }
 
     /// Opened straight from the disk image (or a quarantine "translocated" copy): the background
     /// watcher would point at a path that disappears, so ask the user to move the app first.
     func checkLocation() {
-        let path = Bundle.main.bundlePath
-        guard path.hasPrefix("/Volumes/") || path.contains("/AppTranslocation/") else { return }
+        guard isTemporaryLocation else { return }
         let alert = NSAlert()
         alert.messageText = "Move Travel Mode to Applications first"
         alert.informativeText = "Travel Mode is running from the disk image or a temporary location, and its background helper needs a permanent home.\n\nQuit, drag Travel Mode into the Applications folder, eject the disk image, then open Travel Mode from Applications."
@@ -357,6 +549,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Travel Mode",
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesNow), keyEquivalent: "")
+        updateItem.target = self
+        appMenu.addItem(updateItem)
+        appMenu.addItem(.separator())
         let uninstallItem = NSMenuItem(title: "Uninstall Travel Mode…", action: #selector(uninstall), keyEquivalent: "")
         uninstallItem.target = self
         appMenu.addItem(uninstallItem)
@@ -421,23 +617,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         func action(_ title: String, _ selector: Selector, key: String = "", target: AnyObject? = nil) {
             let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
             item.target = target ?? self
-            item.isEnabled = !model.busy || selector == #selector(showWindow)
+            // Only Turn On/Off and Join wait for a running change to finish.
+            item.isEnabled = !model.busy || ![#selector(toggleFromMenu), #selector(joinFromMenu)].contains(selector)
             menu.addItem(item)
         }
 
         info(s.isOn ? "Travel Mode is On" : "Travel Mode is Off")
+        if model.lidLockBroken { info("Lid lock isn't running: turn off and on again") }
         info("Wi-Fi: \(s.wifiMessage)")
         info("Battery: \(s.battery)\(s.pluggedIn ? ", plugged in" : "")")
         menu.addItem(.separator())
         action(s.isOn ? "Turn Off" : "Turn On", #selector(toggleFromMenu))
         if !model.onHotspot { action(model.joinTitle, #selector(joinFromMenu)) }
         menu.addItem(.separator())
+        if let u = model.update { action("Download Travel Mode \(u.version)…", #selector(openUpdatePage)) }
+        action("Check for Updates…", #selector(checkForUpdatesNow))
         action("Open Travel Mode…", #selector(showWindow))
         let quit = NSMenuItem(title: "Quit Travel Mode", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
     }
 
     @objc func toggleFromMenu() { model.setOn(!model.state.isOn) }
+
+    // MARK: Updates
+
+    @objc func openUpdatePage() {
+        if let u = model.update { NSWorkspace.shared.open(u.page) }
+    }
+
+    @objc func checkForUpdatesNow() {
+        UpdateCheck.check { [weak self] result in
+            guard let self = self else { return }
+            self.model.apply(result)
+            if #available(macOS 14.0, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
+            let alert = NSAlert()
+            switch result {
+            case .available(let v, let page):
+                alert.messageText = "Travel Mode \(v) is available"
+                alert.informativeText = "You have \(UpdateCheck.currentVersion). Download the new disk image from GitHub, quit Travel Mode, then drag the new Travel Mode onto Applications and choose Replace. Your settings stay as they are."
+                alert.addButton(withTitle: "Download…")
+                alert.addButton(withTitle: "Later")
+                if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(page) }
+            case .upToDate(let v):
+                alert.messageText = "Travel Mode is up to date"
+                alert.informativeText = "Version \(v) is the latest."
+                alert.runModal()
+            case .failed(let why):
+                alert.messageText = "Couldn't check for updates"
+                alert.informativeText = why
+                alert.runModal()
+            }
+        }
+    }
 
     @objc func joinFromMenu() {
         if model.state.hotspot.isEmpty { showWindow(); chooseHotspot() } else { model.join() }
@@ -498,6 +729,17 @@ func snapshot(to path: String, dark: Bool, demo: Bool) -> Int32 {
 
 let app = NSApplication.shared
 let arguments = CommandLine.arguments
+if arguments.contains("--check-update") { // prints the result of one update check, for testing
+    UpdateCheck.check { result in
+        switch result {
+        case .available(let v, let page): print("available\t\(v)\t\(page.absoluteString)")
+        case .upToDate(let v): print("current\t\(v)")
+        case .failed(let why): print("failed\t\(why)")
+        }
+        exit(0)
+    }
+    RunLoop.main.run()
+}
 if let i = arguments.firstIndex(of: "--snapshot"), i + 1 < arguments.count {
     app.setActivationPolicy(.prohibited)
     exit(snapshot(to: arguments[i + 1], dark: arguments.contains("--dark"), demo: arguments.contains("--demo")))

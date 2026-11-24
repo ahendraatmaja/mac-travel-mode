@@ -13,5 +13,10 @@ fi
 rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
 rm -rf "$HOME/Applications/Travel Mode.app" "$HOME/Library/Application Support/Travel Mode"
 /usr/bin/defaults delete io.github.ahendraatmaja.mac-travel-mode 2>/dev/null || true
-rm -f "$HOME/.local/bin/travel-mode" "$HOME/Library/Logs/travel-mode.log" "$HOME/Library/Logs/travel-mode.err.log"
+# The command link, only if it is ours (a link into a Travel Mode app)
+LINK="$HOME/.local/bin/travel-mode"
+case "$(/usr/bin/readlink "$LINK" 2>/dev/null)" in
+  *"/Travel Mode.app/Contents/Resources/bin/travel-mode") rm -f "$LINK" ;;
+esac
+rm -f "$HOME/Library/Logs/travel-mode.log" "$HOME/Library/Logs/travel-mode.log.tmp" "$HOME/Library/Logs/travel-mode.err.log"
 echo "Travel Mode removed. Normal sleep is on."

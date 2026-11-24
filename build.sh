@@ -5,6 +5,9 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 APP="$ROOT/build/Travel Mode.app"
 VERSION="$(cat "$ROOT/VERSION")"
 BUNDLE_ID="io.github.ahendraatmaja.mac-travel-mode"
+# Where "Check for Updates" looks for releases (owner/name on GitHub). Forks: set UPDATE_REPO.
+UPDATE_REPO="${UPDATE_REPO:-ahendraatmaja/mac-travel-mode}"
+[[ "$UPDATE_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "UPDATE_REPO must look like owner/name"; exit 1; }
 
 if ! /usr/bin/xcrun --find swiftc >/dev/null 2>&1; then
   echo "Travel Mode needs the Xcode Command Line Tools. Run: xcode-select --install"; exit 1
@@ -27,7 +30,7 @@ ARCHS=(-arch arm64 -arch x86_64 -mmacosx-version-min=13.0)
 /usr/bin/xcrun clang "${ARCHS[@]}" -O2 -o "$RES/bin/lockscreen" "$ROOT/src/lockscreen.c"
 "$RES/bin/lockscreen" --check
 /usr/bin/xcrun clang "${ARCHS[@]}" -fobjc-arc -O2 -o "$RES/bin/wifiname" "$ROOT/src/wifiname.m" \
-  -framework Foundation -framework SystemConfiguration
+  -framework Foundation -framework SystemConfiguration -framework CoreWLAN
 cp "$ROOT/src/bin/travel-mode" "$RES/bin/travel-mode"
 chmod +x "$RES/bin/travel-mode"
 cp "$ROOT/assets/TravelMode.icns" "$RES/AppIcon.icns"
@@ -51,6 +54,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>MIT License</string>
+  <key>TMUpdateRepo</key><string>$UPDATE_REPO</string>
 </dict>
 </plist>
 PLIST

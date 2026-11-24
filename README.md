@@ -32,9 +32,12 @@ an automatic screen lock, a hotspot check and automatic reconnect.
 | **Battery at a glance** | Shown in the window and the menu bar menu |
 | **Menu bar icon (optional)** | A suitcase icon, filled when on, with Turn On / Off and Join in its menu |
 | **Survives restarts** | If you restart while it's on, the watcher comes back on its own |
+| **Update check** | Once a day it looks for a newer release on GitHub and offers the download (you can turn this off) |
 
 The app asks for your Mac password (the normal macOS dialog) each time you turn it on or off.
-Your password goes to macOS, never to the app.
+Your password goes to macOS, never to the app. If the screen lock can't start, Travel Mode
+turns normal sleep straight back on rather than leave an unlocked Mac awake, and the window
+warns you if the lock ever stops while Travel Mode is on.
 
 ## Install
 
@@ -70,7 +73,8 @@ This builds **Travel Mode.app** (a small native Swift app) into `~/Applications`
 `travel-mode` command in `~/.local/bin`. Running `./install.sh` again upgrades in place, even
 while Travel Mode is on. A source build runs without the first-launch approval.
 
-Nothing is downloaded at install time and nothing runs in the background while Travel Mode is off.
+Nothing is downloaded at install time. While Travel Mode is off, nothing runs in the background
+(the app itself only if you keep it open in the menu bar).
 
 ## Use
 
@@ -97,13 +101,27 @@ travel-mode log               recent lid-lock and reconnect events
 If Travel Mode hasn't seen your hotspot yet, the first press of **Join Hotspot** asks which saved
 network is your iPhone.
 
+## Updates
+
+With **Check for updates** on (the default), the app asks GitHub once a day for the latest
+release of this repository. When there's a newer version you'll see a banner in the window and a
+**Download** item in the menu bar menu; **Travel Mode > Check for Updates…** checks right away.
+
+Travel Mode never downloads or installs anything itself. To update: download the new disk image
+from the release page, quit Travel Mode, drag the new Travel Mode onto Applications and choose
+**Replace**. Your settings stay. If Travel Mode was on, it keeps running and the background
+watcher switches to the new version the next time you open the app. From source: `git pull`
+then `./install.sh`.
+
 ## Automatic reconnect
 
 While Travel Mode is on, the watcher checks Wi-Fi every 10 seconds:
 
 - **On an iPhone hotspot:** it remembers that network's name. Nothing to set up.
 - **Wi-Fi drops to nothing:** it rejoins the remembered hotspot every 30 seconds for 5 minutes,
-  then every 2 minutes, until it's back.
+  then every 2 minutes, until it's back. Before each try it scans for that name: if the hotspot
+  isn't in range it waits, and if the only network using that name has no password, it doesn't
+  join (an iPhone hotspot always has a password, so that's a lookalike).
 - **You joined another network, or turned Wi-Fi off:** that's your choice, so it leaves it alone.
 
 Every drop, attempt and recovery goes to the log (`travel-mode log`).
@@ -127,7 +145,19 @@ copy of the current network's details that macOS keeps in its network state, wit
 permissions. This is best effort: if a future macOS hides it there too, set the name once with
 `travel-mode hotspot "<name>"`.
 
-Android hotspots use other addresses and show as "another Wi-Fi network".
+Android hotspots use other addresses and show as "another Wi-Fi network". Any network can hand
+out the iPhone's addresses, so a lookalike would show as a hotspot too; Travel Mode never
+remembers or rejoins one without a password.
+
+## Privacy
+
+- Travel Mode has no accounts, analytics or tracking.
+- The only network request it makes is the daily update check: an anonymous request to
+  `api.github.com` for this repository's latest release. Like any web request, GitHub sees your IP
+  address; the app sends nothing else about you or your Mac. Switch off **Check for updates** to
+  stop it.
+- The hotspot name and the event log stay on your Mac (see "Files it touches") and are deleted
+  when you uninstall.
 
 ## Travel tips
 
@@ -153,19 +183,22 @@ never sleep. If that happens, run `sudo pmset -a disablesleep 0` in Terminal.
 | `~/.local/bin/travel-mode` | Link to the command |
 | `~/Library/LaunchAgents/io.github.ahendraatmaja.mac-travel-mode.lid-lock.plist` | The watcher (lid lock + reconnect), only while on |
 | `~/Library/Application Support/Travel Mode/hotspot-name` | The last iPhone hotspot you used |
-| `~/Library/Logs/travel-mode.log` | Lid locks, Wi-Fi drops, reconnect attempts |
-| `~/Library/Preferences/io.github.ahendraatmaja.mac-travel-mode.plist` | The "Show in menu bar" choice and window position |
+| `~/Library/Logs/travel-mode.log` | Lid locks, Wi-Fi drops, reconnect attempts (trimmed to the newest 1000 lines past 512 KB) |
+| `~/Library/Preferences/io.github.ahendraatmaja.mac-travel-mode.plist` | Your choices (menu bar icon, update check), window position, last update check |
 | System power setting `SleepDisabled` | Set to 1 while on, 0 when off |
 
 ## Development
 
-`./test.sh` replays Wi-Fi sequences (hotspot drop, long outage, switching networks, Wi-Fi off)
-through the watcher with a simulated clock. It changes nothing on your Mac.
+`./test.sh` replays Wi-Fi sequences (hotspot drop, long outage, switching networks, Wi-Fi off,
+an open lookalike, hotspot out of range, odd network names) through the watcher with a simulated
+clock, and checks the launchd file for unusual install folders. It changes nothing on your Mac.
 
 The app is one Swift file (`src/app/main.swift`) driving the `travel-mode` script. `./build.sh`
 builds a universal app (Apple silicon + Intel); `./make-dmg.sh` wraps it in a drag-to-Applications
 disk image (`build/Travel-Mode-<version>.dmg`), and signs and notarises it when `SIGN_IDENTITY`
-and `NOTARY_PROFILE` are set (see the script). To redraw the
+and `NOTARY_PROFILE` are set (see the script). In a fork, build with
+`UPDATE_REPO=<owner>/<repo> ./build.sh` so the update check follows your releases; run
+`"build/Travel Mode.app/Contents/MacOS/TravelMode" --check-update` to test it. To redraw the
 README screenshots: `"build/Travel Mode.app/Contents/MacOS/TravelMode" --snapshot out.png --demo`
 (add `--dark` for dark mode).
 

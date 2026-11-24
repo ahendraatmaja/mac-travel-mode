@@ -19,7 +19,7 @@ touch "$DEST"
 /usr/bin/mdimport "$DEST" 2>/dev/null || true
 
 mkdir -p "$HOME/.local/bin"
-ln -sf "$DEST/Contents/Resources/bin/travel-mode" "$HOME/.local/bin/travel-mode"
+ln -sfn "$DEST/Contents/Resources/bin/travel-mode" "$HOME/.local/bin/travel-mode"
 
 # If Travel Mode is already on (upgrade), point the watcher at the new copy.
 "$DEST/Contents/Resources/bin/travel-mode" _rewatch
