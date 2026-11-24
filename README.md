@@ -32,7 +32,7 @@ an automatic screen lock, a hotspot check and automatic reconnect.
 | **Battery at a glance** | Shown in the window and the menu bar menu |
 | **Menu bar icon (optional)** | A suitcase icon, filled when on, with Turn On / Off and Join in its menu |
 | **Survives restarts** | If you restart while it's on, the watcher comes back on its own |
-| **Update check** | Once a day it looks for a newer release on GitHub and offers the download (you can turn this off) |
+| **Update check** | Click **Check for Updates** to see if there's a newer release, with a link to it on GitHub |
 
 The app asks for your Mac password (the normal macOS dialog) each time you turn it on or off.
 Your password goes to macOS, never to the app. If the screen lock can't start, Travel Mode
@@ -103,15 +103,18 @@ network is your iPhone.
 
 ## Updates
 
-With **Check for updates** on (the default), the app asks GitHub once a day for the latest
-release of this repository. When there's a newer version you'll see a banner in the window and a
-**Download** item in the menu bar menu; **Travel Mode > Check for Updates…** checks right away.
+Click **Check for Updates** at the bottom of the window (also in the **Travel Mode** menu and the
+menu bar menu). It asks GitHub for this repository's latest release and shows either "You're up
+to date" or the new version with a **View on GitHub** link. Travel Mode never checks on its own,
+and never downloads or installs anything itself.
 
-Travel Mode never downloads or installs anything itself. To update: download the new disk image
-from the release page, quit Travel Mode, drag the new Travel Mode onto Applications and choose
-**Replace**. Your settings stay. If Travel Mode was on, it keeps running and the background
-watcher switches to the new version the next time you open the app. From source: `git pull`
-then `./install.sh`.
+To update: download the new disk image from the release page, quit Travel Mode, drag the new
+Travel Mode onto Applications and choose **Replace**. Your settings stay. If Travel Mode was on,
+it keeps running, and the background watcher switches to the new version the next time you open
+the app. From source: `git pull`, then `./install.sh`.
+
+Want to hear about new versions without checking? On GitHub, click **Watch > Custom > Releases**
+on this repository.
 
 ## Automatic reconnect
 
@@ -152,10 +155,9 @@ remembers or rejoins one without a password.
 ## Privacy
 
 - Travel Mode has no accounts, analytics or tracking.
-- The only network request it makes is the daily update check: an anonymous request to
+- It goes online only when you click **Check for Updates**: one anonymous request to
   `api.github.com` for this repository's latest release. Like any web request, GitHub sees your IP
-  address; the app sends nothing else about you or your Mac. Switch off **Check for updates** to
-  stop it.
+  address; the app sends nothing else about you or your Mac.
 - The hotspot name and the event log stay on your Mac (see "Files it touches") and are deleted
   when you uninstall.
 
@@ -184,7 +186,7 @@ never sleep. If that happens, run `sudo pmset -a disablesleep 0` in Terminal.
 | `~/Library/LaunchAgents/io.github.ahendraatmaja.mac-travel-mode.lid-lock.plist` | The watcher (lid lock + reconnect), only while on |
 | `~/Library/Application Support/Travel Mode/hotspot-name` | The last iPhone hotspot you used |
 | `~/Library/Logs/travel-mode.log` | Lid locks, Wi-Fi drops, reconnect attempts (trimmed to the newest 1000 lines past 512 KB) |
-| `~/Library/Preferences/io.github.ahendraatmaja.mac-travel-mode.plist` | Your choices (menu bar icon, update check), window position, last update check |
+| `~/Library/Preferences/io.github.ahendraatmaja.mac-travel-mode.plist` | The "Show in menu bar" choice and window position |
 | System power setting `SleepDisabled` | Set to 1 while on, 0 when off |
 
 ## Development

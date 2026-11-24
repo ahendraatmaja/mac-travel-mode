@@ -129,68 +129,41 @@ final class TravelModel: ObservableObject {
         }
     }
 
-    @Published var checkForUpdates: Bool {
-        didSet {
-            UserDefaults.standard.set(checkForUpdates, forKey: "checkForUpdates")
-            if checkForUpdates { checkUpdatesIfDue() } else { setUpdate(nil) }
-        }
+    enum UpdateStatus: Equatable {
+        case idle, checking, upToDate
+        case available(AvailableUpdate)
+        case failed(String)
     }
-    @Published private(set) var update: AvailableUpdate?
+    /// Changes only when the user clicks Check for Updates: Travel Mode never checks on its own.
+    @Published private(set) var updateStatus = UpdateStatus.idle
+    var update: AvailableUpdate? {
+        if case .available(let u) = updateStatus { return u }
+        return nil
+    }
 
     var onMenuBarChange: ((Bool) -> Void)?
     var onChange: (() -> Void)?
 
     let tool: String
     private var timer: Timer?
-    private var updateTimer: Timer?
     private var refreshing = false
-    private var checkingUpdates = false
 
     init() {
         tool = Bundle.main.resourceURL!.appendingPathComponent("bin/travel-mode").path
-        let defaults = UserDefaults.standard
-        defaults.register(defaults: ["checkForUpdates": true])
-        showInMenuBar = defaults.bool(forKey: "showInMenuBar")
-        checkForUpdates = defaults.bool(forKey: "checkForUpdates")
-        // An update found by an earlier check, until this copy is that version or newer.
-        if checkForUpdates, let v = defaults.string(forKey: "updateVersion"),
-           let p = defaults.string(forKey: "updatePage"), let page = URL(string: p),
-           UpdateCheck.isNewer(v, than: UpdateCheck.currentVersion) {
-            update = AvailableUpdate(version: v, page: page)
-        }
+        showInMenuBar = UserDefaults.standard.bool(forKey: "showInMenuBar")
     }
 
-    // Updates
-
-    func setUpdate(_ u: AvailableUpdate?) {
-        update = u
-        let defaults = UserDefaults.standard
-        defaults.set(u?.version, forKey: "updateVersion")
-        defaults.set(u?.page.absoluteString, forKey: "updatePage")
-        onChange?()
-    }
-
-    func apply(_ result: UpdateCheck.Result) {
-        switch result {
-        case .available(let v, let page):
-            setUpdate(AvailableUpdate(version: v, page: page))
-        case .upToDate:
-            setUpdate(nil)
-        case .failed:
-            return // offline or similar: keep what we knew and try again later
-        }
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
-    }
-
-    /// At most once a day, and only when the user leaves "Check for updates" on.
-    func checkUpdatesIfDue() {
-        guard checkForUpdates, !checkingUpdates else { return }
-        let last = UserDefaults.standard.double(forKey: "lastUpdateCheck")
-        guard Date().timeIntervalSince1970 - last >= 24 * 3600 else { return }
-        checkingUpdates = true
+    func checkForUpdates() {
+        guard updateStatus != .checking else { return }
+        updateStatus = .checking
         UpdateCheck.check { [weak self] result in
-            self?.checkingUpdates = false
-            self?.apply(result)
+            guard let self = self else { return }
+            switch result {
+            case .available(let v, let page): self.updateStatus = .available(AvailableUpdate(version: v, page: page))
+            case .upToDate: self.updateStatus = .upToDate
+            case .failed(let why): self.updateStatus = .failed(why)
+            }
+            self.onChange?()
         }
     }
 
@@ -238,9 +211,6 @@ final class TravelModel: ObservableObject {
 
     func startTimer() {
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
-        updateTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            self?.checkUpdatesIfDue()
-        }
     }
 
     func setOn(_ on: Bool) { perform([on ? "on" : "off"]) }
@@ -312,6 +282,29 @@ struct InfoRow: View {
     }
 }
 
+struct UpdateStatusLine: View {
+    let status: TravelModel.UpdateStatus
+
+    var body: some View {
+        switch status {
+        case .idle: caption("Connects to GitHub only when you click.")
+        case .checking: caption("Checking…")
+        case .upToDate: caption("You're up to date.")
+        case .failed(let why): caption("Couldn't check: \(why)")
+        case .available(let u):
+            HStack(spacing: 4) {
+                Text("Version \(u.version) is available.")
+                Link("View on GitHub", destination: u.page)
+            }
+            .font(.caption)
+        }
+    }
+
+    func caption(_ text: String) -> some View {
+        Text(text).font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var model: TravelModel
     var chooseHotspot: () -> Void
@@ -333,20 +326,6 @@ struct ContentView: View {
                     }
                 }
                 Spacer()
-            }
-
-            if let u = model.update {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(.accentColor)
-                    Text("Travel Mode \(u.version) is available")
-                    Spacer()
-                    Button("Download…") { NSWorkspace.shared.open(u.page) }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.12)))
             }
 
             VStack(spacing: 0) {
@@ -411,18 +390,14 @@ struct ContentView: View {
                     .toggleStyle(.switch)
             }
 
-            HStack(alignment: .top) {
+            HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Check for updates")
-                    Text("Once a day, looks up the latest version on GitHub. No personal data is sent.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Version \(UpdateCheck.currentVersion)")
+                    UpdateStatusLine(status: model.updateStatus)
                 }
                 Spacer()
-                Toggle("Check for updates", isOn: $model.checkForUpdates)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
+                Button("Check for Updates") { model.checkForUpdates() }
+                    .disabled(model.updateStatus == .checking)
             }
         }
         .padding(20)
@@ -448,7 +423,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         showWindow()
         checkLocation()
         refreshWatcherIfNeeded()
-        model.checkUpdatesIfDue()
     }
 
     /// Running from the disk image or a quarantine "translocated" copy, which disappear later.
@@ -630,7 +604,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         action(s.isOn ? "Turn Off" : "Turn On", #selector(toggleFromMenu))
         if !model.onHotspot { action(model.joinTitle, #selector(joinFromMenu)) }
         menu.addItem(.separator())
-        if let u = model.update { action("Download Travel Mode \(u.version)…", #selector(openUpdatePage)) }
+        if let u = model.update { action("Version \(u.version) on GitHub…", #selector(openUpdatePage)) }
         action("Check for Updates…", #selector(checkForUpdatesNow))
         action("Open Travel Mode…", #selector(showWindow))
         let quit = NSMenuItem(title: "Quit Travel Mode", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -645,29 +619,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if let u = model.update { NSWorkspace.shared.open(u.page) }
     }
 
+    /// Menu items: open the window and check there, so the result shows next to the button.
     @objc func checkForUpdatesNow() {
-        UpdateCheck.check { [weak self] result in
-            guard let self = self else { return }
-            self.model.apply(result)
-            if #available(macOS 14.0, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
-            let alert = NSAlert()
-            switch result {
-            case .available(let v, let page):
-                alert.messageText = "Travel Mode \(v) is available"
-                alert.informativeText = "You have \(UpdateCheck.currentVersion). Download the new disk image from GitHub, quit Travel Mode, then drag the new Travel Mode onto Applications and choose Replace. Your settings stay as they are."
-                alert.addButton(withTitle: "Download…")
-                alert.addButton(withTitle: "Later")
-                if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(page) }
-            case .upToDate(let v):
-                alert.messageText = "Travel Mode is up to date"
-                alert.informativeText = "Version \(v) is the latest."
-                alert.runModal()
-            case .failed(let why):
-                alert.messageText = "Couldn't check for updates"
-                alert.informativeText = why
-                alert.runModal()
-            }
-        }
+        showWindow()
+        model.checkForUpdates()
     }
 
     @objc func joinFromMenu() {

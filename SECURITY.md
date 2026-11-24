@@ -1,8 +1,8 @@
 # Security
 
 Travel Mode runs one command as administrator, `pmset -a disablesleep 1` or `0`, through the
-standard macOS password dialog. Everything else runs as you. The app makes one network request:
-the optional daily update check to `api.github.com`.
+standard macOS password dialog. Everything else runs as you. The app goes online only when you click
+**Check for Updates** (one request to `api.github.com`).
 
 ## Reporting a problem
 
