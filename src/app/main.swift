@@ -63,6 +63,36 @@ enum UpdateCheck {
         return false
     }
 
+    /// Plain-language reasons for the usual ways a check fails on the road.
+    static func explain(_ error: Error) -> String {
+        let reach = "Couldn't reach GitHub. Check your connection, then try again."
+        let e = error as NSError
+        guard e.domain == NSURLErrorDomain else { return reach }   // e.g. a firewall app blocked it
+        switch e.code {
+        case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorDataNotAllowed,
+             NSURLErrorInternationalRoamingOff, NSURLErrorCallIsActive:
+            return "No internet connection. Connect to Wi-Fi or your hotspot, then try again."
+        case NSURLErrorTimedOut:
+            return "GitHub didn't answer in time. Check your connection, then try again."
+        case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted,
+             NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateHasUnknownRoot,
+             NSURLErrorServerCertificateNotYetValid:
+            return "Couldn't connect to GitHub securely. On hotel or airport Wi-Fi, sign in to the network first."
+        default:
+            return reach
+        }
+    }
+
+    static func explain(status: Int) -> String {
+        switch status {
+        case 404: return "No published release was found on GitHub."
+        case 403, 429: return "GitHub is limiting requests right now. Try again in a few minutes."
+        case 500...599: return "GitHub is having trouble right now. Try again later."
+        case 200: return "Got a web page instead of GitHub's answer. On hotel or airport Wi-Fi, sign in to the network first."
+        default: return "GitHub sent an unexpected answer (HTTP \(status))."
+        }
+    }
+
     static func check(completion: @escaping (Result) -> Void) {
         let current = currentVersion
         guard let repo = repo, let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else {
@@ -78,13 +108,12 @@ enum UpdateCheck {
                 session.finishTasksAndInvalidate()
                 DispatchQueue.main.async { completion(result) }
             }
-            if let error = error { return finish(.failed(error.localizedDescription)) }
+            if let error = error { return finish(.failed(explain(error))) }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if status == 404 { return finish(.failed("No published release was found on GitHub.")) }
             guard status == 200, let data = data,
                   let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                   let tag = json["tag_name"] as? String
-            else { return finish(.failed("GitHub sent an unexpected answer (HTTP \(status)).")) }
+            else { return finish(.failed(explain(status: status))) }
             let version = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
             guard version.range(of: #"^[0-9][0-9A-Za-z.-]{0,31}$"#, options: .regularExpression) != nil else {
                 return finish(.failed("GitHub sent an unexpected version number."))
@@ -290,7 +319,12 @@ struct UpdateStatusLine: View {
         case .idle: caption("Connects to GitHub only when you click.")
         case .checking: caption("Checking…")
         case .upToDate: caption("You're up to date.")
-        case .failed(let why): caption("Couldn't check: \(why)")
+        case .failed(let why):
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+                caption("Couldn't check. \(why)")
+            }
+            .font(.caption)
         case .available(let u):
             HStack(spacing: 4) {
                 Text("Version \(u.version) is available.")
