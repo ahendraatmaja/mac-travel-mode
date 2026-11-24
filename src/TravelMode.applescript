@@ -19,14 +19,14 @@ repeat
 	set info to "Wi-Fi: " & wifiMsg & return & "Battery: " & batt
 
 	if isOn then
-		set msg to "Travel Mode is ON" & return & return & "Your Mac stays awake with the lid closed and locks when you close it." & return & return & info
+		set msg to "Travel Mode is ON" & return & return & "Your Mac stays awake with the lid closed, locks when you close it, and rejoins your hotspot if Wi-Fi drops." & return & return & info
 		if onHotspot then
 			set r to display dialog msg buttons {"Keep On", "Turn Off"} default button "Keep On" with title "Travel Mode" with icon note
 		else
 			set r to display dialog msg buttons {joinLabel, "Keep On", "Turn Off"} default button joinLabel with title "Travel Mode" with icon caution
 		end if
 	else
-		set msg to "Travel Mode is OFF" & return & return & "Turn it on to keep your Mac awake with the lid closed. The screen still locks when you close it." & return & return & info
+		set msg to "Travel Mode is OFF" & return & return & "Turn it on to keep your Mac awake with the lid closed. The screen still locks when you close it, and it rejoins your hotspot if Wi-Fi drops." & return & return & info
 		if onHotspot then
 			set r to display dialog msg buttons {"Cancel", "Turn On"} default button "Turn On" with title "Travel Mode" with icon note
 		else

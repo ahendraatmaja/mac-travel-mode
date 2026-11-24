@@ -1,26 +1,41 @@
 #!/bin/bash
 # travel-mode: keep a Mac awake with the lid closed, lock the screen when the lid closes,
-# and check that Wi-Fi is on an iPhone Personal Hotspot.
+# check that Wi-Fi is on an iPhone Personal Hotspot, and rejoin that hotspot if Wi-Fi drops.
 #
 #   travel-mode on | off | toggle | status
 #   travel-mode wifi              -> "<state><TAB><message>", state = hotspot | other | off | none
-#   travel-mode join [name]       -> join the saved hotspot (or <name>) and wait until it is up
-#   travel-mode hotspot [name]    -> show or set the hotspot network name
+#   travel-mode join [name]       -> join the last hotspot (or <name>) and wait until it is up
+#   travel-mode hotspot [name]    -> show or set the hotspot to rejoin (learned automatically)
 #   travel-mode networks          -> list saved Wi-Fi networks
+#   travel-mode log               -> show recent lid-lock and reconnect events
 set -u
 
 SELF="$(/usr/bin/readlink -f "$0" 2>/dev/null || echo "$0")"
 BIN_DIR="$(cd "$(/usr/bin/dirname "$SELF")" && pwd)"
 LABEL="io.github.ahendraatmaja.mac-travel-mode.lid-lock"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-CONF_DIR="$HOME/Library/Application Support/Travel Mode"
+CONF_DIR="${TM_CONF_DIR:-$HOME/Library/Application Support/Travel Mode}"
 HOTSPOT_FILE="$CONF_DIR/hotspot-name"
-LOG="$HOME/Library/Logs/travel-mode.log"
+LOG="${TM_LOG:-$HOME/Library/Logs/travel-mode.log}"
 HOTSPOT_ROUTER="172.20.10.1"   # iPhone / iPad Personal Hotspot always uses 172.20.10.0/28
 
-is_on() { /usr/bin/pmset -g | /usr/bin/grep -q 'SleepDisabled[[:space:]]*1'; }
+# Test hooks (used by test.sh only): TM_TEST=1 fakes "travel mode on", replays Wi-Fi states from
+# TM_TEST_WIFI (comma list, one per 10 s check), reports TM_TEST_NAME as the network name, uses a
+# simulated clock (2 s per loop), logs joins instead of running them, stops after TM_TEST_TICKS loops.
+TM_TEST="${TM_TEST:-}"
+
+is_on() {
+  [ -n "$TM_TEST" ] && return 0
+  /usr/bin/pmset -g | /usr/bin/grep -q 'SleepDisabled[[:space:]]*1'
+}
+
+tm_log() { /bin/mkdir -p "$(/usr/bin/dirname "$LOG")"; echo "$(/bin/date '+%F %T') $*" >> "$LOG"; }
 
 wifi_dev() { /usr/sbin/networksetup -listallhardwareports | /usr/bin/awk '/Wi-Fi/{getline; print $2; exit}'; }
+
+wifi_name() { # name of the Wi-Fi network we're on, if the helper can read it
+  [ -x "$BIN_DIR/wifiname" ] && "$BIN_DIR/wifiname" "$(wifi_dev)" 2>/dev/null
+}
 
 admin() { # $1 = shell command run as root, $2 = reason shown in the macOS password dialog
   /usr/bin/osascript -e "do shell script \"$1\" with administrator privileges with prompt \"$2\"" >/dev/null
@@ -64,17 +79,71 @@ lock_now() {
   /usr/bin/pmset displaysleepnow   # fallback: locks if "Require password" is set to Immediately
 }
 
-cmd_watch() { # run by launchd: lock on lid close while travel mode is on; exit when it is off
-  local prev="No" lid
+cmd_watch() { # run by launchd while travel mode is on; exits when it is off
+  # Every 2 s: lock the screen when the lid closes.
+  # Every 10 s: remember the hotspot we're on; if Wi-Fi drops to nothing, try to rejoin it
+  # (every 30 s for 5 minutes, then every 2 minutes). Another network or Wi-Fi off = leave it alone.
+  local prev_lid="No" lid tick=0 state prev_state="" lost_at=0 last_try=0 tries=0 gap now name dev i seq
+  dev=$(wifi_dev)
   while :; do
     is_on || exit 0
-    lid=$(/usr/sbin/ioreg -r -k AppleClamshellState -d 1 | /usr/bin/awk -F'= ' '/"AppleClamshellState"/ {print $2; exit}')
-    if [ "$lid" = "Yes" ] && [ "$prev" != "Yes" ]; then
-      lock_now
-      echo "$(/bin/date '+%F %T') lid closed -> screen locked" >> "$LOG"
+
+    if [ -z "$TM_TEST" ]; then
+      lid=$(/usr/sbin/ioreg -r -k AppleClamshellState -d 1 | /usr/bin/awk -F'= ' '/"AppleClamshellState"/ {print $2; exit}')
+      if [ "$lid" = "Yes" ] && [ "$prev_lid" != "Yes" ]; then
+        lock_now
+        tm_log "lid closed -> screen locked"
+      fi
+      prev_lid="$lid"
     fi
-    prev="$lid"
-    /bin/sleep 2
+
+    if [ $((tick % 5)) -eq 0 ]; then
+      if [ -n "$TM_TEST" ]; then
+        IFS=',' read -r -a seq <<< "${TM_TEST_WIFI:-none}"
+        i=$((tick / 5)); [ "$i" -ge "${#seq[@]}" ] && i=$((${#seq[@]} - 1))
+        state="${seq[$i]}"; now=$((1000 + tick * 2))
+      else
+        state=$(cmd_wifi | /usr/bin/cut -f1); now=$(/bin/date +%s)
+      fi
+      case "$state" in
+        hotspot)
+          if [ -n "$TM_TEST" ]; then name="${TM_TEST_NAME:-}"; else name=$(wifi_name || true); fi
+          if [ -n "$name" ] && [ "$name" != "$(cmd_hotspot || true)" ]; then
+            cmd_hotspot "$name" >/dev/null
+            tm_log "remembered hotspot: $name"
+          fi
+          [ "$lost_at" -gt 0 ] && tm_log "back on the hotspot after $((now - lost_at)) s"
+          lost_at=0; tries=0 ;;
+        none)
+          if [ "$lost_at" -eq 0 ]; then
+            lost_at=$now
+            tm_log "Wi-Fi disconnected (was: ${prev_state:-unknown})"
+          fi
+          name=$(cmd_hotspot || true)
+          gap=30; [ "$tries" -ge 10 ] && gap=120
+          if [ -n "$name" ] && [ $((now - lost_at)) -ge 10 ] && [ $((now - last_try)) -ge "$gap" ]; then
+            tries=$((tries + 1)); last_try=$now
+            if [ -n "$TM_TEST" ]; then
+              tm_log "reconnect attempt $tries: would join $name"
+            else
+              tm_log "reconnect attempt $tries: joining $name"
+              ( out=$(/usr/sbin/networksetup -setairportnetwork "$dev" "$name" 2>&1); [ -n "$out" ] && tm_log "  $out" ) &
+            fi
+          fi ;;
+        *)  # other network or Wi-Fi off: the user's choice, leave it alone
+          if [ "$prev_state" = "hotspot" ] || [ "$lost_at" -gt 0 ]; then tm_log "now on: $state (not reconnecting)"; fi
+          lost_at=0; tries=0 ;;
+      esac
+      prev_state=$state
+    fi
+
+    tick=$((tick + 1))
+    if [ -n "$TM_TEST" ]; then
+      [ "$tick" -ge "${TM_TEST_TICKS:-1}" ] && exit 0
+      /bin/sleep "${TM_TEST_SLEEP:-0}"
+    else
+      /bin/sleep 2
+    fi
   done
 }
 
@@ -94,7 +163,11 @@ cmd_wifi() {
   local d dev
   for d in $(/usr/sbin/networksetup -listallhardwareports | /usr/bin/awk '/^Device:/{print $2}'); do
     if [ "$(/usr/sbin/ipconfig getoption "$d" router 2>/dev/null)" = "$HOTSPOT_ROUTER" ]; then
-      printf 'hotspot\t✓ On your iPhone hotspot\n'; return 0
+      local n=""
+      [ "$d" = "$(wifi_dev)" ] && n=$(wifi_name || true)
+      if [ -n "$n" ]; then printf 'hotspot\t✓ On your iPhone hotspot (%s)\n' "$n"
+      else printf 'hotspot\t✓ On your iPhone hotspot\n'; fi
+      return 0
     fi
   done
   dev=$(wifi_dev)
@@ -134,8 +207,9 @@ cmd_join() {
 
 cmd_status() {
   if is_on; then echo "Travel Mode: ON (lid close will not sleep)"; else echo "Travel Mode: OFF (normal sleep)"; fi
-  if watcher_running; then echo "Lid lock:    on (screen locks when the lid closes)"; else echo "Lid lock:    off"; fi
+  if watcher_running; then echo "Watcher:     on (locks on lid close, rejoins the hotspot if Wi-Fi drops)"; else echo "Watcher:     off"; fi
   echo "Wi-Fi:       $(cmd_wifi | /usr/bin/cut -f2)"
+  echo "Rejoins:     $(cmd_hotspot || echo "no hotspot remembered yet")"
   echo "Battery:     $(/usr/bin/pmset -g batt | /usr/bin/grep -Eo '[0-9]+%' | /usr/bin/head -1)"
 }
 
@@ -149,8 +223,9 @@ case "${1:-status}" in
   join)     shift; cmd_join "${1:-}" ;;
   hotspot)  shift; cmd_hotspot "${1:-}" ;;
   networks) cmd_networks ;;
+  log)      /usr/bin/tail -n "${2:-20}" "$LOG" 2>/dev/null || echo "No events yet." ;;
   _watch)   cmd_watch ;;
   _rewatch) if is_on; then watcher_start; fi ;;   # after install/upgrade: point the watcher at this copy
-  -h|--help|help) /usr/bin/sed -n '2,9p' "$SELF" | /usr/bin/sed 's/^# \{0,1\}//' ;;
+  -h|--help|help) /usr/bin/sed -n '2,10p' "$SELF" | /usr/bin/sed 's/^# \{0,1\}//' ;;
   *) echo "Unknown command: $1 (try: travel-mode help)"; exit 2 ;;
 esac

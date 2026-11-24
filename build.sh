@@ -16,8 +16,11 @@ chmod +x "$RES/bin/travel-mode"
 if /usr/bin/xcrun --find clang >/dev/null 2>&1; then
   /usr/bin/xcrun clang -O2 -o "$RES/bin/lockscreen" "$ROOT/src/lockscreen.c"
   "$RES/bin/lockscreen" --check
+  /usr/bin/xcrun clang -fobjc-arc -O2 -o "$RES/bin/wifiname" "$ROOT/src/wifiname.m" \
+    -framework Foundation -framework SystemConfiguration
 else
-  echo "Note: clang not found (run: xcode-select --install). Lid lock will fall back to display sleep."
+  echo "Note: clang not found (run: xcode-select --install). Lid lock will fall back to display sleep,"
+  echo "      and the hotspot name won't be learned automatically (set it with: travel-mode hotspot <name>)."
 fi
 
 cp "$ROOT/assets/TravelMode.icns" "$RES/applet.icns"
