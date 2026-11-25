@@ -4,8 +4,7 @@
 
 Close your MacBook's lid and keep it working: long downloads, builds, AI coding sessions you
 follow from your phone. Travel Mode keeps the Mac awake with the lid closed, **locks the screen
-when you close it**, tells you whether Wi-Fi is on your **iPhone Personal Hotspot**, and
-**rejoins that hotspot** if the connection drops.
+when you close it**, and tells you whether Wi-Fi is on your **iPhone Personal Hotspot**.
 
 <p align="center">
   <picture>
@@ -19,7 +18,7 @@ when you close it**, tells you whether Wi-Fi is on your **iPhone Personal Hotspo
 macOS always sleeps when you close the lid, unless an external display is plugged in.
 `caffeinate` and most "keep awake" apps only stop *idle* sleep, not lid-close sleep.
 Travel Mode uses the built-in `pmset disablesleep` switch, and adds what you want on the road:
-an automatic screen lock, a hotspot check and automatic reconnect.
+an automatic screen lock and a hotspot check.
 
 ## What it does
 
@@ -27,10 +26,10 @@ an automatic screen lock, a hotspot check and automatic reconnect.
 |---|---|
 | **Stays awake with the lid closed** | `pmset -a disablesleep 1` while on, back to normal when off |
 | **Locks on lid close** | A small background watcher locks the screen within about 2 seconds of the lid closing |
-| **Hotspot check** | Shows "On your iPhone hotspot", or a warning plus a **Join** button |
-| **Rejoins your hotspot** | If Wi-Fi drops to nothing, it rejoins the last iPhone hotspot you used (details below) |
+| **Hotspot check** | Shows "On your iPhone hotspot", or a warning to join it from the Wi-Fi menu |
+| **Wi-Fi log** | While on, notes when Wi-Fi drops and how long until it's back |
 | **Battery at a glance** | Shown in the window and the menu bar menu |
-| **Menu bar icon (optional)** | A suitcase icon, filled when on, with Turn On / Off and Join in its menu |
+| **Menu bar icon (optional)** | A suitcase icon, filled when on, with Turn On / Off in its menu |
 | **Survives restarts** | If you restart while it's on, the watcher comes back on its own |
 | **Update check** | Click **Check for Updates** to see if there's a newer release, with a link to it on GitHub |
 
@@ -82,7 +81,7 @@ Nothing is downloaded at install time. While Travel Mode is off, nothing runs in
 usual close, minimise and zoom buttons (Cmd+W, Cmd+M, Cmd+Q work too).
 
 **Menu bar:** switch on **Show in menu bar** to keep a suitcase icon in the menu bar (filled while
-Travel Mode is on). Its menu shows the status, Turn On / Off, Join your hotspot, and Open. With
+Travel Mode is on). Its menu shows the status, Turn On / Off, Check for Updates and Open. With
 the icon on, closing the window keeps Travel Mode in the menu bar; with it off, closing the
 window quits the app. To have the icon after a restart, add Travel Mode to **System Settings >
 General > Login Items**.
@@ -92,14 +91,8 @@ General > Login Items**.
 ```text
 travel-mode on | off | toggle | status
 travel-mode wifi              hotspot / other / off / none, plus a message
-travel-mode join [name]       join your hotspot and wait until it's connected
-travel-mode hotspot [name]    show or set the hotspot to rejoin (learned automatically)
-travel-mode networks          list saved Wi-Fi networks
-travel-mode log               recent lid-lock and reconnect events
+travel-mode log               recent lid locks and Wi-Fi changes
 ```
-
-If Travel Mode hasn't seen your hotspot yet, the first press of **Join Hotspot** asks which saved
-network is your iPhone.
 
 ## Updates
 
@@ -118,22 +111,23 @@ the app. From source: `git pull`, then `./install.sh`.
 Want to hear about new versions without checking? On GitHub, click **Watch > Custom > Releases**
 on this repository.
 
-## Automatic reconnect
+## Getting on your hotspot, and back on after a drop
 
-While Travel Mode is on, the watcher checks Wi-Fi every 10 seconds:
+Join your iPhone's hotspot from the **Wi-Fi menu** in the menu bar, under Personal Hotspot.
+Travel Mode shows a warning while you're on anything else.
 
-- **On an iPhone hotspot:** it remembers that network's name. Nothing to set up.
-- **Wi-Fi drops to nothing:** it rejoins the remembered hotspot every 30 seconds for 5 minutes,
-  then every 2 minutes, until it's back. Before each try it scans for that name: if the hotspot
-  isn't in range it waits, and if the only network using that name has no password, it doesn't
-  join (an iPhone hotspot always has a password, so that's a lookalike).
-- **You joined another network, or turned Wi-Fi off:** that's your choice, so it leaves it alone.
+To have the Mac rejoin the hotspot by itself when Wi-Fi drops, open **System Settings > Wi-Fi**
+and set **Ask to join hotspots** to **Automatic** (macOS 26 or later; older versions word it
+differently). macOS then reconnects the same way the Wi-Fi menu does. If another saved Wi-Fi
+network is in range, macOS may choose that one instead.
 
-Every drop, attempt and recovery goes to the log (`travel-mode log`).
+Travel Mode doesn't join networks itself. When your iPhone and Mac share an Apple Account, the
+hotspot password comes from iCloud, and the command-line tool for joining networks can't use it
+(it fails with error -3900). While Travel Mode is on, it notes every Wi-Fi change in its log
+instead, so you can see when Wi-Fi dropped and how long until it was back (`travel-mode log`).
 
-A rejoin only works while the iPhone is still broadcasting its hotspot. If iOS switches the
-hotspot off to save battery, keep it running: on the iPhone, open **Settings > Personal Hotspot**,
-turn on **Allow Others to Join** and **Maximize Compatibility**, and avoid Low Power Mode while
+To keep the hotspot from switching off: on the iPhone, open **Settings > Personal Hotspot**, turn
+on **Allow Others to Join** and **Maximize Compatibility**, and avoid Low Power Mode while
 travelling. A USB cable to the iPhone is the most reliable of all, and Travel Mode recognises it
 as your hotspot too.
 
@@ -145,14 +139,13 @@ an iPhone or iPad Personal Hotspot always uses the `172.20.10.0/28` network with
 `172.20.10.1`. Travel Mode reads each network interface's own router address, so a VPN doesn't
 confuse it.
 
-For the reconnect it does need the hotspot's name. A small helper (`wifiname`) reads it from the
-copy of the current network's details that macOS keeps in its network state, with no extra
-permissions. This is best effort: if a future macOS hides it there too, set the name once with
-`travel-mode hotspot "<name>"`.
+To show the network's name, a small helper (`wifiname`) reads it from the copy of the current
+network's details that macOS keeps in its network state, with no extra permissions. The name is
+only displayed, never stored. If a future macOS hides it there too, the window just leaves the
+name out.
 
 Android hotspots use other addresses and show as "another Wi-Fi network". Any network can hand
-out the iPhone's addresses, so a lookalike would show as a hotspot too; Travel Mode never
-remembers or rejoins one without a password.
+out the iPhone's addresses, so a lookalike would show as a hotspot too.
 
 ## Privacy
 
@@ -160,8 +153,8 @@ remembers or rejoins one without a password.
 - It goes online only when you click **Check for Updates**: one anonymous request to
   `api.github.com` for this repository's latest release. Like any web request, GitHub sees your IP
   address; the app sends nothing else about you or your Mac.
-- The hotspot name and the event log stay on your Mac (see "Files it touches") and are deleted
-  when you uninstall.
+- The event log stays on your Mac (see "Files it touches") and is deleted when you uninstall.
+- It never joins, changes or forgets Wi-Fi networks.
 
 ## Travel tips
 
@@ -185,17 +178,16 @@ never sleep. If that happens, run `sudo pmset -a disablesleep 0` in Terminal.
 |---|---|
 | `~/Applications/Travel Mode.app` | The app (the scripts live inside it) |
 | `~/.local/bin/travel-mode` | Link to the command |
-| `~/Library/LaunchAgents/io.github.ahendraatmaja.mac-travel-mode.lid-lock.plist` | The watcher (lid lock + reconnect), only while on |
-| `~/Library/Application Support/Travel Mode/hotspot-name` | The last iPhone hotspot you used |
-| `~/Library/Logs/travel-mode.log` | Lid locks, Wi-Fi drops, reconnect attempts (trimmed to the newest 1000 lines past 512 KB) |
+| `~/Library/LaunchAgents/io.github.ahendraatmaja.mac-travel-mode.lid-lock.plist` | The watcher (lid lock + Wi-Fi log), only while on |
+| `~/Library/Logs/travel-mode.log` | Lid locks and Wi-Fi changes (trimmed to the newest 1000 lines past 512 KB) |
 | `~/Library/Preferences/io.github.ahendraatmaja.mac-travel-mode.plist` | The "Show in menu bar" choice and window position |
 | System power setting `SleepDisabled` | Set to 1 while on, 0 when off |
 
 ## Development
 
-`./test.sh` replays Wi-Fi sequences (hotspot drop, long outage, switching networks, Wi-Fi off,
-an open lookalike, hotspot out of range, odd network names) through the watcher with a simulated
-clock, and checks the launchd file for unusual install folders. It changes nothing on your Mac.
+`./test.sh` replays Wi-Fi sequences (hotspot drop and recovery, long outage, switching networks,
+Wi-Fi off) through the watcher with a simulated clock, and checks the launchd file for unusual
+install folders. It changes nothing on your Mac.
 
 The app is one Swift file (`src/app/main.swift`) driving the `travel-mode` script. `./build.sh`
 builds a universal app (Apple silicon + Intel); `./make-dmg.sh` wraps it in a drag-to-Applications
@@ -204,7 +196,7 @@ and `NOTARY_PROFILE` are set (see the script). In a fork, build with
 `UPDATE_REPO=<owner>/<repo> ./build.sh` so the update check follows your releases; run
 `"build/Travel Mode.app/Contents/MacOS/TravelMode" --check-update` to test it. To redraw the
 README screenshots: `"build/Travel Mode.app/Contents/MacOS/TravelMode" --snapshot out.png --demo`
-(add `--dark` for dark mode).
+(add `--dark` for dark mode, `--away` for the not-on-hotspot warning).
 
 ## License
 

@@ -151,7 +151,6 @@ final class TravelModel: ObservableObject {
         var wifiMessage = "Checking…"
         var battery = ""
         var pluggedIn = false
-        var hotspot = ""                // remembered hotspot name
     }
 
     @Published private(set) var state = State()
@@ -209,7 +208,6 @@ final class TravelModel: ObservableObject {
         let wifi = Shell.run(tool, ["wifi"]).out.components(separatedBy: "\t")
         s.wifiState = wifi.first ?? "none"
         if wifi.count > 1 { s.wifiMessage = String(wifi[1].drop(while: { !$0.isLetter })) }
-        s.hotspot = Shell.run(tool, ["hotspot"]).out
         let batt = Shell.run("/usr/bin/pmset", ["-g", "batt"]).out
         if let r = batt.range(of: #"\d+%"#, options: .regularExpression) {
             s.battery = String(batt[r])
@@ -239,9 +237,12 @@ final class TravelModel: ObservableObject {
         onChange?()
     }
 
-    func loadDemo() { // sample data for README screenshots
-        state = State(isOn: true, wifiState: "hotspot", wifiMessage: "On your iPhone hotspot (My iPhone)",
-                      battery: "82%", pluggedIn: false, hotspot: "My iPhone")
+    func loadDemo(away: Bool = false) { // sample data for README screenshots (away: not on the hotspot)
+        state = away
+            ? State(isOn: true, wifiState: "other", wifiMessage: "On Hotel Guest, not your iPhone hotspot",
+                    battery: "82%", pluggedIn: false)
+            : State(isOn: true, wifiState: "hotspot", wifiMessage: "On your iPhone hotspot (My iPhone)",
+                    battery: "82%", pluggedIn: false)
     }
 
     func startTimer() {
@@ -250,21 +251,9 @@ final class TravelModel: ObservableObject {
 
     func setOn(_ on: Bool) { perform([on ? "on" : "off"]) }
 
-    func join(_ name: String? = nil) {
-        var args = ["join"]
-        if let name = name { args.append(name) }
-        perform(args)
-    }
-
-    func networks() -> [String] {
-        Shell.run(tool, ["networks"]).out.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
-    }
-
-    func rememberHotspot(_ name: String) { Shell.run(tool, ["hotspot", name]) }
-
     private func perform(_ args: [String]) {
         busy = true
-        note = args.first == "join" ? "Joining…" : ""
+        note = ""
         let tool = self.tool
         DispatchQueue.global(qos: .userInitiated).async {
             let r = Shell.run(tool, args)
@@ -278,8 +267,10 @@ final class TravelModel: ObservableObject {
 
     // Presentation helpers
     var onHotspot: Bool { state.wifiState == "hotspot" }
+    /// Travel Mode never joins a network itself: a script can't use a hotspot password that came
+    /// from iCloud, while the Wi-Fi menu (and macOS's own auto-join) can.
+    static let joinHint = "Join your iPhone hotspot from the Wi-Fi menu in the menu bar."
     var lidLockBroken: Bool { state.isOn && !state.watching }
-    var joinTitle: String { state.hotspot.isEmpty ? "Join Hotspot…" : "Join \(state.hotspot)" }
     var batterySymbol: String {
         if state.pluggedIn { return "battery.100.bolt" }
         let n = Int(state.battery.prefix { $0.isNumber }) ?? 100
@@ -298,9 +289,10 @@ struct InfoRow: View {
     let tint: Color
     let title: String
     let value: String
+    var detail: String? = nil
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: detail == nil ? .center : .firstTextBaseline, spacing: 12) {
             Image(systemName: symbol)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(tint)
@@ -308,10 +300,18 @@ struct InfoRow: View {
             Text(title)
                 .foregroundColor(.secondary)
                 .frame(width: 62, alignment: .leading)
-            Text(value)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 9)
     }
@@ -353,7 +353,6 @@ struct UpdateStatusLine: View {
 
 struct ContentView: View {
     @ObservedObject var model: TravelModel
-    var chooseHotspot: () -> Void
 
     var body: some View {
         let s = model.state
@@ -384,29 +383,19 @@ struct ContentView: View {
                 InfoRow(symbol: model.onHotspot ? "personalhotspot" : "wifi.exclamationmark",
                         tint: model.onHotspot ? .green : .orange,
                         title: "Wi-Fi",
-                        value: s.wifiMessage)
+                        value: s.wifiMessage,
+                        detail: model.onHotspot ? nil : TravelModel.joinHint)
                 Divider().padding(.leading, 34)
                 InfoRow(symbol: model.batterySymbol,
                         tint: .secondary,
                         title: "Battery",
                         value: s.pluggedIn ? "\(s.battery), plugged in" : s.battery)
-                Divider().padding(.leading, 34)
-                InfoRow(symbol: "arrow.triangle.2.circlepath",
-                        tint: .secondary,
-                        title: "Rejoins",
-                        value: s.hotspot.isEmpty ? "No hotspot yet" : s.hotspot)
             }
             .padding(.horizontal, 12)
             .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
 
             HStack(spacing: 10) {
-                if !model.onHotspot {
-                    Button(model.joinTitle) {
-                        if s.hotspot.isEmpty { chooseHotspot() } else { model.join() }
-                    }
-                    .controlSize(.large)
-                }
                 Spacer()
                 if model.busy { ProgressView().controlSize(.small) }
                 Button(s.isOn ? "Turn Off" : "Turn On") { model.setOn(!s.isOn) }
@@ -552,7 +541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func buildWindow() {
-        let view = ContentView(model: model, chooseHotspot: { [weak self] in self?.chooseHotspot() })
+        let view = ContentView(model: model)
         window = NSWindow(contentViewController: NSHostingController(rootView: view))
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.title = "Travel Mode"
@@ -637,8 +626,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         func action(_ title: String, _ selector: Selector, key: String = "", target: AnyObject? = nil) {
             let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
             item.target = target ?? self
-            // Only Turn On/Off and Join wait for a running change to finish.
-            item.isEnabled = !model.busy || ![#selector(toggleFromMenu), #selector(joinFromMenu)].contains(selector)
+            // Only Turn On/Off waits for a running change to finish.
+            item.isEnabled = !model.busy || selector != #selector(toggleFromMenu)
             menu.addItem(item)
         }
 
@@ -648,7 +637,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         info("Battery: \(s.battery)\(s.pluggedIn ? ", plugged in" : "")")
         menu.addItem(.separator())
         action(s.isOn ? "Turn Off" : "Turn On", #selector(toggleFromMenu))
-        if !model.onHotspot { action(model.joinTitle, #selector(joinFromMenu)) }
         menu.addItem(.separator())
         if let u = model.update { action("Version \(u.version) on GitHub…", #selector(openUpdatePage)) }
         action("Check for Updates…", #selector(checkForUpdatesNow))
@@ -670,43 +658,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         showWindow()
         model.checkForUpdates()
     }
-
-    @objc func joinFromMenu() {
-        if model.state.hotspot.isEmpty { showWindow(); chooseHotspot() } else { model.join() }
-    }
-
-    // MARK: Hotspot picker
-
-    func chooseHotspot() {
-        let nets = model.networks()
-        let alert = NSAlert()
-        if nets.isEmpty {
-            alert.messageText = "No saved Wi-Fi networks"
-            alert.informativeText = "Join your iPhone's hotspot once from the Wi-Fi menu. Travel Mode remembers it after that."
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-            return
-        }
-        alert.messageText = "Which saved network is your iPhone hotspot?"
-        alert.informativeText = "Travel Mode joins it now, and rejoins it if Wi-Fi drops while Travel Mode is on."
-        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 26), pullsDown: false)
-        popup.addItems(withTitles: nets)
-        alert.accessoryView = popup
-        alert.addButton(withTitle: "Join")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn, let name = popup.titleOfSelectedItem {
-            model.rememberHotspot(name)
-            model.join(name)
-        }
-    }
 }
 
 // MARK: - Snapshot (docs and checks)
 
-func snapshot(to path: String, dark: Bool, demo: Bool) -> Int32 {
+func snapshot(to path: String, dark: Bool, demo: Bool, away: Bool) -> Int32 {
     let model = TravelModel()
-    if demo { model.loadDemo() } else { model.refreshNow() }
-    let host = NSHostingView(rootView: ContentView(model: model, chooseHotspot: {})
+    if demo { model.loadDemo(away: away) } else { model.refreshNow() }
+    let host = NSHostingView(rootView: ContentView(model: model)
         .frame(width: 400)
         .background(Color(nsColor: .windowBackgroundColor)))
     host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
@@ -743,7 +702,8 @@ if arguments.contains("--check-update") { // prints the result of one update che
 }
 if let i = arguments.firstIndex(of: "--snapshot"), i + 1 < arguments.count {
     app.setActivationPolicy(.prohibited)
-    exit(snapshot(to: arguments[i + 1], dark: arguments.contains("--dark"), demo: arguments.contains("--demo")))
+    exit(snapshot(to: arguments[i + 1], dark: arguments.contains("--dark"), demo: arguments.contains("--demo"),
+                  away: arguments.contains("--away")))
 }
 let delegate = AppDelegate()
 app.delegate = delegate

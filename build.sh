@@ -30,7 +30,7 @@ ARCHS=(-arch arm64 -arch x86_64 -mmacosx-version-min=13.0)
 /usr/bin/xcrun clang "${ARCHS[@]}" -O2 -o "$RES/bin/lockscreen" "$ROOT/src/lockscreen.c"
 "$RES/bin/lockscreen" --check
 /usr/bin/xcrun clang "${ARCHS[@]}" -fobjc-arc -O2 -o "$RES/bin/wifiname" "$ROOT/src/wifiname.m" \
-  -framework Foundation -framework SystemConfiguration -framework CoreWLAN
+  -framework Foundation -framework SystemConfiguration
 cp "$ROOT/src/bin/travel-mode" "$RES/bin/travel-mode"
 chmod +x "$RES/bin/travel-mode"
 cp "$ROOT/assets/TravelMode.icns" "$RES/AppIcon.icns"
